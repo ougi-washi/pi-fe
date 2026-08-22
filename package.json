@@ -1,0 +1,44 @@
+{
+  "name": "pi-fe",
+  "version": "0.1.0",
+  "description": "PI For Engineers — strict, fail-closed C and C++ implementation plugin for Pi",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "files": ["src"],
+  "exports": {
+    ".": "./src/index.ts",
+    "./config": "./src/config.ts",
+    "./policy": "./src/policy.ts",
+    "./watcher": "./src/watcher.ts",
+    "./clang": "./src/clang.ts",
+    "./transaction": "./src/transaction.ts",
+    "./tools": "./src/tools.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
+}
