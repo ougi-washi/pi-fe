@@ -58,7 +58,7 @@ async function initialBatch(pi: ExtensionAPI, root: string): Promise<AutomaticBa
 
 function automaticContent(batch: AutomaticBatch): string {
   const paths = batch.paths.join("\n");
-  return `${AUTOMATIC_PREFIX}\n\n${IMPLEMENTATION_POLICY}\n\nkind=${batch.kind}\npaths:\n${paths}${batch.diff ? `\ndiff:\n${batch.diff}` : ""}`;
+  return `${AUTOMATIC_PREFIX}\nkind=${batch.kind}\npaths:\n${paths}${batch.diff ? `\ndiff:\n${batch.diff}` : ""}`;
 }
 
 export function stripAutomaticProse(message: AssistantMessage): AssistantMessage {
@@ -158,6 +158,19 @@ export default function piFe(pi: ExtensionAPI): void {
     if (event.message.role === "custom" && event.message.customType === "pi-fe-implementation") {
       state.automaticRun = true;
     }
+  });
+
+  pi.on("context", (event) => {
+    if (!state.automaticRun) return;
+    const index = event.messages.findLastIndex(
+      (message) => message.role === "custom" && message.customType === "pi-fe-implementation",
+    );
+    if (index < 0) return;
+    const message = event.messages[index]!;
+    if (message.role !== "custom") return;
+    const messages = [...event.messages];
+    messages[index] = { ...message, content: `${IMPLEMENTATION_POLICY}\n\n${message.content}` };
+    return { messages };
   });
 
   pi.on("message_end", (event) => {

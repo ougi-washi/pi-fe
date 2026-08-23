@@ -98,7 +98,7 @@ describe("Pi extension", () => {
     });
     expect(testState.messages[0]!.message.content).toContain("paths:\nvalue.hpp");
     expect(testState.messages[0]!.message.content).toContain("diff:\n+int value();");
-    expect(testState.messages[0]!.message.content).toContain(IMPLEMENTATION_POLICY);
+    expect(testState.messages[0]!.message.content).not.toContain(IMPLEMENTATION_POLICY);
 
     await testState.commands.get("pi-fe")!.handler("", ctx);
     expect(testState.notifications.at(-1)).toBe("pi-fe:off");
@@ -138,6 +138,10 @@ describe("Pi extension", () => {
     expect((await emit("message_end", { message: normalMessage }, ctx))[0]).toBeUndefined();
 
     await emit("message_start", { message: { role: "custom", ...testState.messages[0]!.message } }, ctx);
+    const automaticContext = (await emit("context", {
+      messages: [{ role: "custom", ...testState.messages[0]!.message }],
+    }, ctx))[0];
+    expect(automaticContext.messages[0].content).toContain(IMPLEMENTATION_POLICY);
     expect(testState.transformers[0]!("automatic prose", { messageType: "assistant" })).toBe("");
     expect(testState.transformers[0]!("automatic thinking", { messageType: "assistant-thinking" })).toBe("");
     expect(IMPLEMENTATION_POLICY).toContain("authoritative signatures are immutable inputs");
@@ -165,6 +169,12 @@ describe("Pi extension", () => {
     });
 
     await emit("agent_settled", {}, ctx);
+    expect((await emit("context", {
+      messages: [
+        { role: "custom", ...testState.messages[0]!.message },
+        { role: "user", content: "Normal user request" },
+      ],
+    }, ctx))[0]).toBeUndefined();
     expect((await emit("tool_call", { toolName: "bash", input: { command: "./build.sh" } }, ctx))[0]).toBeUndefined();
 
     await testState.commands.get("pi-fe")!.handler("", ctx);

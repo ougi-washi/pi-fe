@@ -1,6 +1,6 @@
 {
   "name": "pi-fe",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Minimal continuous implementation watcher for Pi",
   "type": "module",
   "keywords": ["pi-package"],
