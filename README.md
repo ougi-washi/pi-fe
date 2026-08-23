@@ -1,8 +1,8 @@
 # PI For Engineers
 
-**PI For Engineers** (`pi-fe`) is a fail-closed Pi 0.84.2 implementation plugin. It watches all eligible project inputs during the active Pi session, turns external changes into hidden analysis runs, and implements only existing function-level areas in `.c` and `.cpp` files through a Clang-backed mutation pipeline.
+`pi-fe` is a minimal continuous implementation plugin for Pi. It watches a project and asks Pi to keep C and C++ implementations synchronized with the declarations written by the user.
 
-It never changes structures, classes, unions, enums, fields, bases, templates, declarations, signatures, headers, or API/ABI surfaces. It never creates source files or invents tests, scaffolding, abstractions, retries, logging, fallback behavior, placeholders, or workaround code. When an exact high-quality implementation cannot be proven from the existing contract, it leaves only a technical `//@TODO:` or `//@NOTE:`.
+The watcher is language-neutral. C and C++ are the first implementation policy; adding another language later does not require replacing the watcher.
 
 ## Install
 
@@ -10,102 +10,49 @@ It never changes structures, classes, unions, enums, fields, bases, templates, d
 pi install /absolute/path/to/pi-fe
 ```
 
-The package manifest loads `src/index.ts`. Runtime dependencies are production dependencies; Pi core packages and `typebox` are peers.
+The package is a standard Pi extension loaded through the `pi.extensions` entry in `package.json`.
 
 Requirements:
 
 - Pi 0.84.2-compatible runtime
 - Node.js 22.19 or newer
-- Git for Git-aware watch scope
-- Clang and exactly one `compile_commands.json`
-- Original project compiler flags that work from the current working tree
 
-The extension creates no configuration file. It starts and stops its watcher with the Pi session.
+There is no configuration file, compile database, Clang integration, parser, generated symbol list, or custom LLM tool.
 
-## Strict contract
+## Use
 
-Watching is broad; mutation is deliberately narrow. Headers, tests, call sites, build definitions, and contract documentation may trigger and inform analysis, but only contract-backed implementation bodies or exact declared out-of-line definitions in existing `.c`/`.cpp` files can be changed. Tests are evidence and configured validation—not a place to hide a workaround or generate meaningless coverage.
-
-Active LLM tools are limited to:
+Run this command inside a trusted Pi project session:
 
 ```text
-read grep find ls cxx_contract cxx_check cxx_apply cxx_todo cxx_finalize
+/pi-fe
 ```
 
-A separate `tool_call` gate blocks every other tool, including `bash`, `write`, and `edit`, and verifies that allowed names still belong to Pi built-ins or this package. `cxx_apply` accepts only existing, canonical, non-symlink `.c` and `.cpp` files under the repository root. It rejects file creation, headers, stale hashes/generations, overlapping or non-unique replacements, declaration/ABI/definition/preprocessor/template changes, unmatched symbols, new unproven performance operations, and candidates that add compiler diagnostics or configured failures. Every touched symbol needs both exact header-declaration evidence and symbol-tied behavioral evidence (`header_contract`, `test`, `call_site`, `sibling`, or `documentation` with a concrete constraint); a bare declaration is ambiguous and must use `cxx_todo`.
+The first call enables the watcher and immediately queues a hidden project scan. The next call disables it. The footer and notification use the terse states `pi-fe:on` and `pi-fe:off`.
 
-Ambiguity is recorded only through grammar-checked comments such as:
+While enabled, file changes are debounced and coalesced. Only one automatic implementation pass is outstanding. Changes received while Pi is working are queued for the next pass. Pi-authored edits cause a convergence pass; when that pass makes no further edit, the plugin waits for the next filesystem change.
 
-```cpp
-//@TODO: reason=ambiguous_contract symbol=Widget::update header=include/widget.hpp:41 required=ownership,error_policy
-//@NOTE: evidence=test path=test/widget_test.cpp:92 constraint=preserve_allocation_count
-```
+Every ordinary project file can trigger analysis. Only `.git`, `node_modules`, editor swap files, and temporary files are ignored. The watcher does not interpret languages or declarations.
 
-Assistant prose and thinking are removed from rendering and persistence. Every strict run must end with `cxx_finalize`, whose tool result is terminating structured JSON.
+## Ownership
 
-## Tools
+User-authored structs, classes, unions, enums, fields, bases, templates, declarations, and authoritative signatures are immutable inputs. Headers and other declarations are the authority.
 
-- **`cxx_contract`** — loads the unique compile command, runs Clang JSON AST extraction, and returns declarations, definitions, body ranges, references, diagnostics, compile-command evidence, and the header Merkle root.
-- **`cxx_check`** — runs only named compile/configured-test checks using executable-plus-argv commands.
-- **`cxx_apply`** — builds candidates in memory, verifies evidence and hashes, parses baseline/candidate ASTs, performs structural/export/performance checks in a copied temporary workspace, runs differential configured checks, rechecks races, and commits through Pi's file mutation queue.
-- **`cxx_todo`** — inserts only validated `//@TODO:` or `//@NOTE:` lines in existing source files, with the same generation/hash/commit checks.
-- **`cxx_finalize`** — validates the run result and terminates without a prose follow-up.
+During an automatic C/C++ pass, Pi may only:
 
-Tool output is truncated with Pi's standard 2,000-line/50-KB limits.
+- fill or update a matching function, method, constructor, or destructor body in an existing implementation file;
+- add an unambiguous out-of-line definition to an existing implementation file;
+- mirror an authoritative declaration exactly in the corresponding implementation-side signature;
+- add a strictly necessary include to an implementation file.
 
-## Watch behavior
+Pi does not create source files, headers, tests, documentation, configuration, APIs, helper types, scaffolding, abstractions, fallbacks, logging, retries, compatibility behavior, or unrelated cleanup. It does not run a plugin-managed compiler, formatter, test, benchmark, or verification pipeline.
 
-In Git repositories, tracked files and untracked files not excluded by Git are eligible. `.git`, dependency trees, conventional output/generated directories, caches, and editor temporary files are ignored. In non-Git directories, configured include/exclude globs apply.
+Implementations must be the simplest, most direct, and most efficient form supported by the existing contract. Workarounds are forbidden. If a serious concern makes implementation impossible, Pi may add one concise `// @TODO:` or `// @NOTE:` beside the relevant existing implementation location. If no existing implementation file or unambiguous location exists, it leaves the declaration untouched.
 
-Events are canonicalized, hashed, debounced, coalesced, and assigned generations. Atomic saves at one pathname collapse to one change; matching remove/add hashes can be reported as renames. A committed source hash is suppressed once, while any unexpected hash remains external. Only one automatic run is outstanding; newer batches replace the pending generation and are queued as a Pi `followUp`.
+## Enforcement boundary
 
-## Trusted configuration
+The ownership contract is an instruction applied only to hidden watcher turns. Normal user turns keep Pi's ordinary system prompt, tools, rendering, and behavior.
 
-For a trusted project, optional configuration is read from `.pi/pi-fe.json` (preferred) or `.pi-fe.json`. Command values are argv arrays and are never interpreted as shell source.
-
-```json
-{
-  "enabled": true,
-  "compileCommands": "build/compile_commands.json",
-  "watch": {
-    "debounceMs": 250,
-    "exclude": ["build/**", "vendor/**", "generated/**"]
-  },
-  "verification": {
-    "tests": [
-      {
-        "id": "widget-unit",
-        "paths": ["src/widget.cpp"],
-        "argv": ["ctest", "--test-dir", "build", "-R", "widget"]
-      }
-    ],
-    "benchmarks": [
-      {
-        "id": "widget-benchmark",
-        "paths": ["src/widget.cpp"],
-        "symbols": ["Widget::update"],
-        "argv": ["./build/widget-benchmark"],
-        "warmup": 1,
-        "samples": 5
-      }
-    ]
-  },
-  "performance": {
-    "hotSymbols": ["Widget::update"],
-    "maxRegressionPercent": 2
-  }
-}
-```
-
-No test, linter, formatter, sanitizer, benchmark, retry, fallback, or workaround command is invented. Existing `.clang-tidy` and `.clang-format` files opt their corresponding changed-path checks in. Raw shell executables are rejected even when represented as argv. Baseline and candidate commands run in separate symlink-free temporary snapshots, never in the live working tree.
-
-## Atomicity and trust boundary
-
-Candidates never replace working-tree source before validation. Each final file replacement uses a same-directory temporary file, `fsync`, and rename; multi-file failures are rolled back when the committed candidate hash is still present. Generation, header-root, evidence, and source hashes are rechecked immediately before commit and before each rename.
-
-Portable filesystems do not provide a multi-path atomic commit or a pathname compare-and-swap. Consequently, no Node extension can make several renames simultaneously visible or prevent an uncooperative process from writing in the final hash-check/rename interval. `pi-fe` detects races at every available boundary, serializes cooperating Pi mutations, and reports rollback conflicts rather than overwriting an unexpected post-commit hash. Projects requiring stronger guarantees must run on a transactional/CAS filesystem or restrict each request to one file.
-
-Trusted compile databases and configured commands can execute project toolchains and are not a sandbox. Temporary verification copies do not hard-link working-tree files.
+Because `pi-fe` deliberately uses no compiler frontend or language parser, it does not claim to prove structurally that every model edit preserves declarations. The plugin stays small; preservation is enforced by the automatic agent instruction.
 
 ## Development
 
@@ -114,5 +61,3 @@ npm install
 npm run typecheck
 npm test
 ```
-
-Tests cover confinement, traversal/symlink denial, exact edits, TODO grammar, header hashing, Git-aware debounce and self-write suppression, Clang extraction and compile-database ambiguity, stale/racing transactions, structural rejection, and atomic-save watcher behavior. Fixtures include C, C++, macro, and template cases.

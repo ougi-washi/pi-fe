@@ -1,99 +1,179 @@
-import { execFile } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import piFe from "../src/index.js";
+import piFe, { AUTOMATIC_PREFIX, IMPLEMENTATION_POLICY } from "../src/index.js";
 
-const execFileAsync = promisify(execFile);
-
-async function repository(): Promise<string> {
-  const root = await mkdtemp(resolve(tmpdir(), "pi-fe-index-"));
-  await execFileAsync("git", ["init", "-q"], { cwd: root });
-  await writeFile(resolve(root, "source.cpp"), "int value() { return 1; }\n");
-  await execFileAsync("git", ["add", "source.cpp"], { cwd: root });
-  return root;
+interface Harness {
+  commands: Map<string, { handler: (args: string, ctx: any) => Promise<void> }>;
+  handlers: Map<string, Array<(event: any, ctx: any) => any>>;
+  messages: Array<{ message: any; options: any }>;
+  notifications: string[];
+  statuses: Array<string | undefined>;
+  activeToolChanges: string[][];
+  transformers: Array<(markdown: string, context: any) => string>;
+  pi: any;
 }
 
-function context(root: string, branch: unknown[] = []) {
+function harness(): Harness {
+  const commands = new Map<string, { handler: (args: string, ctx: any) => Promise<void> }>();
+  const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
+  const messages: Array<{ message: any; options: any }> = [];
+  const notifications: string[] = [];
+  const statuses: Array<string | undefined> = [];
+  const activeToolChanges: string[][] = [];
+  const transformers: Array<(markdown: string, context: any) => string> = [];
+  const pi = {
+    registerCommand(name: string, command: { handler: (args: string, ctx: any) => Promise<void> }) {
+      commands.set(name, command);
+    },
+    on(name: string, handler: (event: any, ctx: any) => any) {
+      const entries = handlers.get(name) ?? [];
+      entries.push(handler);
+      handlers.set(name, entries);
+    },
+    sendMessage(message: any, options: any) {
+      messages.push({ message, options });
+    },
+    setActiveTools(tools: string[]) {
+      activeToolChanges.push(tools);
+    },
+    registerMarkdownTransformer(transformer: (markdown: string, context: any) => string) {
+      transformers.push(transformer);
+    },
+  };
+  return { commands, handlers, messages, notifications, statuses, activeToolChanges, transformers, pi };
+}
+
+function context(root: string, trusted = true) {
   return {
     cwd: root,
-    isProjectTrusted: () => true,
-    sessionManager: { getBranch: () => branch },
+    isProjectTrusted: () => trusted,
+    ui: {
+      notify: (message: string) => testState.notifications.push(message),
+      setStatus: (_key: string, value: string | undefined) => testState.statuses.push(value),
+    },
   };
 }
 
-describe("Pi extension integration", () => {
-  it("enforces lifecycle, ownership, single finalizer calls, prose suppression, and terminating JSON", async () => {
-    const root = await repository();
-    const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
-    const tools = new Map<string, any>();
-    const builtins = ["read", "grep", "find", "ls", "bash", "edit", "write"].map((name) => ({
-      name, description: name, parameters: {}, promptGuidelines: [],
-      sourceInfo: { path: `<builtin:${name}>`, source: "builtin", scope: "temporary", origin: "top-level" },
-    }));
-    const transformers: Array<(markdown: string, context: any) => string> = [];
-    const active: string[][] = [];
-    const entries: unknown[] = [];
-    const packageRoot = resolve(import.meta.dirname, "..");
-    const pi = {
-      on(name: string, handler: (event: any, ctx: any) => any) {
-        const values = handlers.get(name) ?? [];
-        values.push(handler);
-        handlers.set(name, values);
-      },
-      registerTool(tool: any) { tools.set(tool.name, tool); },
-      registerMarkdownTransformer(transformer: (markdown: string, context: any) => string) { transformers.push(transformer); },
-      getAllTools() {
-        return [...builtins, ...[...tools.values()].map((tool) => ({
-          ...tool,
-          sourceInfo: { path: resolve(packageRoot, "src", "index.ts"), source: "extension", scope: "temporary", origin: "package" },
-        }))];
-      },
-      getActiveTools() { return active.at(-1) ?? builtins.map((tool) => tool.name); },
-      setActiveTools(names: string[]) { active.push(names); },
-      appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
-      sendMessage() {},
-      async exec(command: string, args: string[], options: { cwd?: string }) {
-        try {
-          const result = await execFileAsync(command, args, { cwd: options.cwd, encoding: "utf8" });
-          return { stdout: result.stdout, stderr: result.stderr, code: 0, killed: false };
-        } catch (error) {
-          const failure = error as Error & { stdout?: string; stderr?: string; code?: number };
-          return { stdout: failure.stdout ?? "", stderr: failure.stderr ?? "", code: failure.code ?? 1, killed: false };
-        }
-      },
+let testState: Harness;
+
+async function emit(name: string, event: any, ctx: any = {}): Promise<any[]> {
+  const output: any[] = [];
+  for (const handler of testState.handlers.get(name) ?? []) output.push(await handler(event, ctx));
+  return output;
+}
+
+async function root(): Promise<string> {
+  return mkdtemp(resolve(tmpdir(), "pi-fe-index-"));
+}
+
+describe("Pi extension", () => {
+  it("registers an idle /pi-fe toggle, starts one bootstrap pass, and stops cleanly", async () => {
+    testState = harness();
+    piFe(testState.pi);
+    const cwd = await root();
+    const ctx = context(cwd);
+
+    expect([...testState.commands.keys()]).toEqual(["pi-fe"]);
+    expect(testState.messages).toEqual([]);
+    expect(testState.activeToolChanges).toEqual([]);
+    await emit("session_start", {}, ctx);
+
+    await testState.commands.get("pi-fe")!.handler("", ctx);
+    expect(testState.notifications).toEqual(["pi-fe:on"]);
+    expect(testState.statuses).toEqual(["pi-fe:on"]);
+    expect(testState.messages).toHaveLength(1);
+    expect(testState.messages[0]).toMatchObject({
+      message: { customType: "pi-fe-implementation", display: false, content: `${AUTOMATIC_PREFIX}\nscan=project` },
+      options: { triggerTurn: true, deliverAs: "followUp" },
+    });
+
+    await testState.commands.get("pi-fe")!.handler("", ctx);
+    expect(testState.notifications.at(-1)).toBe("pi-fe:off");
+    expect(testState.statuses.at(-1)).toBeUndefined();
+    await emit("session_shutdown", {}, ctx);
+  });
+
+  it("refuses to watch an untrusted project", async () => {
+    testState = harness();
+    piFe(testState.pi);
+    const ctx = context(await root(), false);
+    await testState.commands.get("pi-fe")!.handler("", ctx);
+    expect(testState.notifications).toEqual(["pi-fe:untrusted"]);
+    expect(testState.messages).toEqual([]);
+  });
+
+  it("isolates the implementation policy and prose suppression to automatic turns", async () => {
+    testState = harness();
+    piFe(testState.pi);
+    const ctx = context(await root());
+    await testState.commands.get("pi-fe")!.handler("", ctx);
+
+    const normal = (await emit("before_agent_start", { prompt: "Explain this code", systemPrompt: "base" }, ctx))[0];
+    expect(normal).toBeUndefined();
+    expect(testState.transformers[0]!("normal prose", { messageType: "assistant" })).toBe("normal prose");
+    const normalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "normal prose" }],
     };
-    piFe(pi as never);
-    const ctx = context(root);
-    for (const handler of handlers.get("session_start") ?? []) await handler({}, ctx);
-    expect(active.at(-1)).toEqual(["read", "grep", "find", "ls", "cxx_contract", "cxx_check", "cxx_apply", "cxx_todo", "cxx_finalize"]);
-    expect(transformers[0]?.("prose", { messageType: "assistant", isStreaming: false })).toBe("");
+    expect((await emit("message_end", { message: normalMessage }, ctx))[0]).toBeUndefined();
 
-    const gate = handlers.get("tool_call")![0]!;
-    await expect(gate({ toolName: "bash" }, ctx)).resolves.toMatchObject({ block: true });
-    await expect(gate({ toolName: "read" }, ctx)).resolves.toBeUndefined();
-    const mixedBranch = [{
-      type: "message",
-      message: { role: "assistant", content: [
-        { type: "toolCall", id: "1", name: "cxx_finalize", arguments: {} },
-        { type: "toolCall", id: "2", name: "read", arguments: {} },
-      ] },
-    }];
-    await expect(gate({ toolName: "cxx_finalize" }, context(root, mixedBranch))).resolves.toMatchObject({
-      block: true, terminate: true,
+    const automatic = (await emit("before_agent_start", {
+      prompt: `${AUTOMATIC_PREFIX}\nscan=project`,
+      systemPrompt: "base",
+    }, ctx))[0];
+    expect(automatic.systemPrompt).toBe(`base\n\n${IMPLEMENTATION_POLICY}`);
+    expect(testState.transformers[0]!("automatic prose", { messageType: "assistant" })).toBe("");
+    expect(testState.transformers[0]!("automatic thinking", { messageType: "assistant-thinking" })).toBe("");
+    expect(IMPLEMENTATION_POLICY).toContain("authoritative signatures are immutable inputs");
+    expect(IMPLEMENTATION_POLICY).toContain("synchronize an implementation-side definition signature exactly");
+    expect(IMPLEMENTATION_POLICY).toContain("Do not create files");
+    expect(IMPLEMENTATION_POLICY).toContain("Never implement a workaround");
+    expect(IMPLEMENTATION_POLICY).toContain("// @TODO:");
+    expect(IMPLEMENTATION_POLICY).toContain("// @NOTE:");
+    const automaticMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "private" },
+        { type: "text", text: "explanation" },
+        { type: "toolCall", id: "1", name: "edit", arguments: {} },
+      ],
+    };
+    const transformed = (await emit("message_end", { message: automaticMessage }, ctx))[0];
+    expect(transformed.message.content).toEqual([{ type: "toolCall", id: "1", name: "edit", arguments: {} }]);
+
+    await testState.commands.get("pi-fe")!.handler("", ctx);
+  });
+
+  it("queues changed paths after the active pass settles and then converges", async () => {
+    testState = harness();
+    piFe(testState.pi);
+    const cwd = await root();
+    const ctx = context(cwd);
+    await testState.commands.get("pi-fe")!.handler("", ctx);
+    expect(testState.messages).toHaveLength(1);
+
+    await Promise.all([
+      writeFile(resolve(cwd, "value.hpp"), "int value();\n"),
+      writeFile(resolve(cwd, "value.cpp"), "int value() { return 1; }\n"),
+      writeFile(resolve(cwd, "contract.md"), "value contract\n"),
+    ]);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 450));
+    expect(testState.messages).toHaveLength(1);
+
+    await emit("agent_settled", {}, ctx);
+    expect(testState.messages).toHaveLength(2);
+    expect(testState.messages[1]!.message.details).toEqual({
+      kind: "changes",
+      paths: ["contract.md", "value.cpp", "value.hpp"],
     });
 
-    const finalize = tools.get("cxx_finalize");
-    const result = await finalize.execute("id", {
-      generation: 0, status: "unchanged", changed: [], checks: [], todos: [], diagnostics: [],
-    });
-    expect(result.terminate).toBe(true);
-    expect(JSON.parse(result.content[0].text)).toMatchObject({ status: "unchanged" });
+    await emit("before_agent_start", { prompt: testState.messages[1]!.message.content, systemPrompt: "base" }, ctx);
+    await emit("agent_settled", {}, ctx);
+    expect(testState.messages).toHaveLength(2);
 
-    for (const handler of handlers.get("agent_settled") ?? []) await handler({}, ctx);
-    expect(entries).toHaveLength(0);
-    for (const handler of handlers.get("session_shutdown") ?? []) await handler({}, ctx);
+    await emit("session_shutdown", {}, ctx);
+    expect(testState.statuses.at(-1)).toBeUndefined();
   });
 });
