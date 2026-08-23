@@ -11,7 +11,7 @@ export const AUTOMATIC_PREFIX = "PI_FE_AUTOMATIC_IMPLEMENTATION";
 export const IMPLEMENTATION_POLICY = `
 PI-FE C/C++ IMPLEMENTATION MODE
 
-Inspect the reported changes and only the related project context. On an initial scan, inspect the existing C and C++ declarations and implementation files.
+The reported paths and diff are the complete task boundary. This is not a project review, TODO task, planning task, bug sweep, or verification run. Start with the changed paths. Identify only added or changed C/C++ function declarations, find their matching existing implementation file, and implement them. Inspect only directly related declarations, definitions, types, and call sites.
 
 User-authored structs, classes, unions, enums, fields, bases, templates, declarations, and authoritative signatures are immutable inputs. Headers and other user-provided declarations are authoritative. Never edit them or alter user-owned type layout.
 
@@ -21,7 +21,7 @@ You may only:
 - synchronize an implementation-side definition signature exactly to its authoritative declaration;
 - add a strictly necessary implementation-file include.
 
-Do not create files, headers, tests, documentation, configuration, APIs, helper types, unrelated symbols, scaffolding, abstractions, fallbacks, speculative branches, logging, retries, placeholders, test-only behavior, compatibility workarounds, or unrelated cleanup. Do not use compile databases, Clang analysis, generated command lists, benchmarks, formatters, or an extension-managed verification pipeline.
+Do not inspect TODO files, choose project tasks, read Git history, perform repository-wide scans, or run shell commands, builds, tests, linters, formatters, benchmarks, compile databases, Clang analysis, or generated command lists. Do not create files, headers, tests, documentation, configuration, APIs, helper types, unrelated symbols, scaffolding, abstractions, fallbacks, speculative branches, logging, retries, placeholders, test-only behavior, compatibility workarounds, or unrelated cleanup.
 
 Always use the simplest, most direct, and most efficient implementation supported by the existing code and declarations. Never implement a workaround. If implementation is genuinely impossible or presents a serious unresolved concern, add exactly one concise // @TODO: or // @NOTE: beside the relevant existing implementation location. If there is no existing implementation file or unambiguous location, leave the declaration untouched.
 
@@ -37,9 +37,29 @@ interface RuntimeState {
   automaticRun: boolean;
 }
 
-function automaticContent(paths?: readonly string[]): string {
-  if (!paths) return `${AUTOMATIC_PREFIX}\nscan=project`;
-  return `${AUTOMATIC_PREFIX}\nchanged:\n${paths.join("\n")}`;
+interface AutomaticBatch {
+  kind: "initial" | "changes";
+  paths: string[];
+  diff?: string;
+}
+
+async function initialBatch(pi: ExtensionAPI, root: string): Promise<AutomaticBatch | undefined> {
+  const names = await pi.exec("git", ["diff", "--name-only", "-z", "HEAD", "--"], { cwd: root, timeout: 5000 });
+  if (names.code !== 0) return undefined;
+  const paths = names.stdout.split("\0").filter(Boolean).sort();
+  if (paths.length === 0) return undefined;
+  const result = await pi.exec("git", ["diff", "--no-ext-diff", "--unified=0", "HEAD", "--", ...paths], {
+    cwd: root,
+    timeout: 5000,
+  });
+  const output = result.code === 0 ? result.stdout.trim() : "";
+  const diff = output.length > 16000 ? `${output.slice(0, 16000)}\n[diff truncated]` : output;
+  return { kind: "initial", paths, ...(diff ? { diff } : {}) };
+}
+
+function automaticContent(batch: AutomaticBatch): string {
+  const paths = batch.paths.join("\n");
+  return `${AUTOMATIC_PREFIX}\nkind=${batch.kind}\npaths:\n${paths}${batch.diff ? `\ndiff:\n${batch.diff}` : ""}`;
 }
 
 export function isAutomaticPrompt(event: Pick<BeforeAgentStartEvent, "prompt">): boolean {
@@ -61,15 +81,15 @@ export default function piFe(pi: ExtensionAPI): void {
     automaticRun: false,
   };
 
-  const sendAutomatic = (paths?: readonly string[]): void => {
+  const sendAutomatic = (batch: AutomaticBatch): void => {
     if (!state.watcher || state.automaticOutstanding) return;
     state.automaticOutstanding = true;
     pi.sendMessage(
       {
         customType: "pi-fe-implementation",
-        content: automaticContent(paths),
+        content: automaticContent(batch),
         display: false,
-        details: { kind: paths ? "changes" : "initial", paths: paths ?? [] },
+        details: { kind: batch.kind, paths: batch.paths },
       },
       { triggerTurn: true, deliverAs: "followUp" },
     );
@@ -79,7 +99,7 @@ export default function piFe(pi: ExtensionAPI): void {
     if (!state.watcher || state.automaticOutstanding || state.pendingPaths.size === 0) return;
     const paths = [...state.pendingPaths].sort();
     state.pendingPaths.clear();
-    sendAutomatic(paths);
+    sendAutomatic({ kind: "changes", paths });
   };
 
   const stop = async (ctx?: Pick<ExtensionCommandContext, "ui">, announce = false): Promise<void> => {
@@ -126,7 +146,8 @@ export default function piFe(pi: ExtensionAPI): void {
 
       ctx.ui.setStatus("pi-fe", "pi-fe:on");
       ctx.ui.notify("pi-fe:on", "info");
-      sendAutomatic();
+      const batch = await initialBatch(pi, ctx.cwd);
+      if (batch) sendAutomatic(batch);
     },
   });
 
@@ -147,6 +168,12 @@ export default function piFe(pi: ExtensionAPI): void {
   pi.on("message_end", (event) => {
     if (!state.automaticRun || event.message.role !== "assistant") return;
     return { message: stripAutomaticProse(event.message) };
+  });
+
+  pi.on("tool_call", (event) => {
+    if (state.automaticRun && event.toolName === "bash") {
+      return { block: true, reason: "pi-fe automatic turns do not run shell commands" };
+    }
   });
 
   pi.registerMarkdownTransformer((markdown, context) => {

@@ -27,7 +27,7 @@ Run this command inside a trusted Pi project session:
 /pi-fe
 ```
 
-The first call enables the watcher and immediately queues a hidden project scan. The next call disables it. The footer and notification use the terse states `pi-fe:on` and `pi-fe:off`.
+The first call enables the watcher. If tracked working-tree changes already exist, Pi receives their exact paths and compact Git diff as the first hidden implementation pass; a clean tree waits for the next filesystem change. The next call disables the watcher. The footer and notification use the terse states `pi-fe:on` and `pi-fe:off`.
 
 While enabled, file changes are debounced and coalesced. Only one automatic implementation pass is outstanding. Changes received while Pi is working are queued for the next pass. Pi-authored edits cause a convergence pass; when that pass makes no further edit, the plugin waits for the next filesystem change.
 
@@ -45,6 +45,8 @@ During an automatic C/C++ pass, Pi may only:
 - add a strictly necessary include to an implementation file.
 
 Pi does not create source files, headers, tests, documentation, configuration, APIs, helper types, scaffolding, abstractions, fallbacks, logging, retries, compatibility behavior, or unrelated cleanup. It does not run a plugin-managed compiler, formatter, test, benchmark, or verification pipeline.
+
+Automatic passes are declaration-scoped, not project audits. They do not inspect TODO files, select unrelated work, read Git history, perform repository-wide scans, or run shell commands. The `bash` tool is blocked only for automatic watcher turns; normal interactive Pi turns remain unrestricted.
 
 Implementations must be the simplest, most direct, and most efficient form supported by the existing contract. Workarounds are forbidden. If a serious concern makes implementation impossible, Pi may add one concise `// @TODO:` or `// @NOTE:` beside the relevant existing implementation location. If no existing implementation file or unambiguous location exists, it leaves the declaration untouched.
 

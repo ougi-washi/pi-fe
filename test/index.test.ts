@@ -15,7 +15,7 @@ interface Harness {
   pi: any;
 }
 
-function harness(): Harness {
+function harness(gitNames = "value.hpp\0", gitDiff = "+int value();\n"): Harness {
   const commands = new Map<string, { handler: (args: string, ctx: any) => Promise<void> }>();
   const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
   const messages: Array<{ message: any; options: any }> = [];
@@ -40,6 +40,10 @@ function harness(): Harness {
     },
     registerMarkdownTransformer(transformer: (markdown: string, context: any) => string) {
       transformers.push(transformer);
+    },
+    async exec(_command: string, args: string[]) {
+      if (args.includes("--name-only")) return { stdout: gitNames, stderr: "", code: 0, killed: false };
+      return { stdout: gitDiff, stderr: "", code: 0, killed: false };
     },
   };
   return { commands, handlers, messages, notifications, statuses, activeToolChanges, transformers, pi };
@@ -85,9 +89,15 @@ describe("Pi extension", () => {
     expect(testState.statuses).toEqual(["pi-fe:on"]);
     expect(testState.messages).toHaveLength(1);
     expect(testState.messages[0]).toMatchObject({
-      message: { customType: "pi-fe-implementation", display: false, content: `${AUTOMATIC_PREFIX}\nscan=project` },
+      message: {
+        customType: "pi-fe-implementation",
+        display: false,
+        details: { kind: "initial", paths: ["value.hpp"] },
+      },
       options: { triggerTurn: true, deliverAs: "followUp" },
     });
+    expect(testState.messages[0]!.message.content).toContain("paths:\nvalue.hpp");
+    expect(testState.messages[0]!.message.content).toContain("diff:\n+int value();");
 
     await testState.commands.get("pi-fe")!.handler("", ctx);
     expect(testState.notifications.at(-1)).toBe("pi-fe:off");
@@ -102,6 +112,15 @@ describe("Pi extension", () => {
     await testState.commands.get("pi-fe")!.handler("", ctx);
     expect(testState.notifications).toEqual(["pi-fe:untrusted"]);
     expect(testState.messages).toEqual([]);
+  });
+
+  it("waits for a filesystem change when the working tree is clean", async () => {
+    testState = harness("");
+    piFe(testState.pi);
+    const ctx = context(await root());
+    await testState.commands.get("pi-fe")!.handler("", ctx);
+    expect(testState.messages).toEqual([]);
+    await testState.commands.get("pi-fe")!.handler("", ctx);
   });
 
   it("isolates the implementation policy and prose suppression to automatic turns", async () => {
@@ -120,7 +139,7 @@ describe("Pi extension", () => {
     expect((await emit("message_end", { message: normalMessage }, ctx))[0]).toBeUndefined();
 
     const automatic = (await emit("before_agent_start", {
-      prompt: `${AUTOMATIC_PREFIX}\nscan=project`,
+      prompt: testState.messages[0]!.message.content,
       systemPrompt: "base",
     }, ctx))[0];
     expect(automatic.systemPrompt).toBe(`base\n\n${IMPLEMENTATION_POLICY}`);
@@ -130,6 +149,9 @@ describe("Pi extension", () => {
     expect(IMPLEMENTATION_POLICY).toContain("synchronize an implementation-side definition signature exactly");
     expect(IMPLEMENTATION_POLICY).toContain("Do not create files");
     expect(IMPLEMENTATION_POLICY).toContain("Never implement a workaround");
+    expect(IMPLEMENTATION_POLICY).toContain("complete task boundary");
+    expect(IMPLEMENTATION_POLICY).toContain("Do not inspect TODO files");
+    expect(IMPLEMENTATION_POLICY).toContain("run shell commands, builds, tests");
     expect(IMPLEMENTATION_POLICY).toContain("// @TODO:");
     expect(IMPLEMENTATION_POLICY).toContain("// @NOTE:");
     const automaticMessage = {
@@ -142,6 +164,13 @@ describe("Pi extension", () => {
     };
     const transformed = (await emit("message_end", { message: automaticMessage }, ctx))[0];
     expect(transformed.message.content).toEqual([{ type: "toolCall", id: "1", name: "edit", arguments: {} }]);
+    expect((await emit("tool_call", { toolName: "bash", input: { command: "./build.sh" } }, ctx))[0]).toEqual({
+      block: true,
+      reason: "pi-fe automatic turns do not run shell commands",
+    });
+
+    await emit("before_agent_start", { prompt: "Normal user request", systemPrompt: "base" }, ctx);
+    expect((await emit("tool_call", { toolName: "bash", input: { command: "./build.sh" } }, ctx))[0]).toBeUndefined();
 
     await testState.commands.get("pi-fe")!.handler("", ctx);
   });
