@@ -1,5 +1,4 @@
 import type {
-  BeforeAgentStartEvent,
   ExtensionAPI,
   ExtensionCommandContext,
   MessageEndEvent,
@@ -59,11 +58,7 @@ async function initialBatch(pi: ExtensionAPI, root: string): Promise<AutomaticBa
 
 function automaticContent(batch: AutomaticBatch): string {
   const paths = batch.paths.join("\n");
-  return `${AUTOMATIC_PREFIX}\nkind=${batch.kind}\npaths:\n${paths}${batch.diff ? `\ndiff:\n${batch.diff}` : ""}`;
-}
-
-export function isAutomaticPrompt(event: Pick<BeforeAgentStartEvent, "prompt">): boolean {
-  return event.prompt.startsWith(AUTOMATIC_PREFIX);
+  return `${AUTOMATIC_PREFIX}\n\n${IMPLEMENTATION_POLICY}\n\nkind=${batch.kind}\npaths:\n${paths}${batch.diff ? `\ndiff:\n${batch.diff}` : ""}`;
 }
 
 export function stripAutomaticProse(message: AssistantMessage): AssistantMessage {
@@ -159,10 +154,10 @@ export default function piFe(pi: ExtensionAPI): void {
     await stop(ctx);
   });
 
-  pi.on("before_agent_start", (event) => {
-    state.automaticRun = isAutomaticPrompt(event);
-    if (!state.automaticRun) return;
-    return { systemPrompt: `${event.systemPrompt}\n\n${IMPLEMENTATION_POLICY}` };
+  pi.on("message_start", (event) => {
+    if (event.message.role === "custom" && event.message.customType === "pi-fe-implementation") {
+      state.automaticRun = true;
+    }
   });
 
   pi.on("message_end", (event) => {

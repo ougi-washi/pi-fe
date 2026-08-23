@@ -98,6 +98,7 @@ describe("Pi extension", () => {
     });
     expect(testState.messages[0]!.message.content).toContain("paths:\nvalue.hpp");
     expect(testState.messages[0]!.message.content).toContain("diff:\n+int value();");
+    expect(testState.messages[0]!.message.content).toContain(IMPLEMENTATION_POLICY);
 
     await testState.commands.get("pi-fe")!.handler("", ctx);
     expect(testState.notifications.at(-1)).toBe("pi-fe:off");
@@ -129,8 +130,6 @@ describe("Pi extension", () => {
     const ctx = context(await root());
     await testState.commands.get("pi-fe")!.handler("", ctx);
 
-    const normal = (await emit("before_agent_start", { prompt: "Explain this code", systemPrompt: "base" }, ctx))[0];
-    expect(normal).toBeUndefined();
     expect(testState.transformers[0]!("normal prose", { messageType: "assistant" })).toBe("normal prose");
     const normalMessage = {
       role: "assistant",
@@ -138,11 +137,7 @@ describe("Pi extension", () => {
     };
     expect((await emit("message_end", { message: normalMessage }, ctx))[0]).toBeUndefined();
 
-    const automatic = (await emit("before_agent_start", {
-      prompt: testState.messages[0]!.message.content,
-      systemPrompt: "base",
-    }, ctx))[0];
-    expect(automatic.systemPrompt).toBe(`base\n\n${IMPLEMENTATION_POLICY}`);
+    await emit("message_start", { message: { role: "custom", ...testState.messages[0]!.message } }, ctx);
     expect(testState.transformers[0]!("automatic prose", { messageType: "assistant" })).toBe("");
     expect(testState.transformers[0]!("automatic thinking", { messageType: "assistant-thinking" })).toBe("");
     expect(IMPLEMENTATION_POLICY).toContain("authoritative signatures are immutable inputs");
@@ -169,7 +164,7 @@ describe("Pi extension", () => {
       reason: "pi-fe automatic turns do not run shell commands",
     });
 
-    await emit("before_agent_start", { prompt: "Normal user request", systemPrompt: "base" }, ctx);
+    await emit("agent_settled", {}, ctx);
     expect((await emit("tool_call", { toolName: "bash", input: { command: "./build.sh" } }, ctx))[0]).toBeUndefined();
 
     await testState.commands.get("pi-fe")!.handler("", ctx);
@@ -198,7 +193,7 @@ describe("Pi extension", () => {
       paths: ["contract.md", "value.cpp", "value.hpp"],
     });
 
-    await emit("before_agent_start", { prompt: testState.messages[1]!.message.content, systemPrompt: "base" }, ctx);
+    await emit("message_start", { message: { role: "custom", ...testState.messages[1]!.message } }, ctx);
     await emit("agent_settled", {}, ctx);
     expect(testState.messages).toHaveLength(2);
 

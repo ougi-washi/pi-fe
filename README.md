@@ -52,7 +52,7 @@ Implementations must be the simplest, most direct, and most efficient form suppo
 
 ## Enforcement boundary
 
-The ownership contract is an instruction applied only to hidden watcher turns. Normal user turns keep Pi's ordinary system prompt, tools, rendering, and behavior.
+The ownership contract is carried by each hidden watcher message and applies only while that message is being processed. Normal user turns keep Pi's ordinary system prompt, tools, rendering, and behavior.
 
 Because `pi-fe` deliberately uses no compiler frontend or language parser, it does not claim to prove structurally that every model edit preserves declarations. The plugin stays small; preservation is enforced by the automatic agent instruction.
 
