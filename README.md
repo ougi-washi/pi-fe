@@ -15,8 +15,10 @@ pi install git:github.com/ougi-washi/pi-fe
 ```
 
 - Toggles the watcher for the current trusted Pi session.
-- On enable, handles current tracked edits and then watches all project files.
+- On enable, queues one initial implementation scan and then watches all project files.
 - Debounces changes, runs one hidden implementation pass at a time, and converges until no further edit is needed.
+- Every automatic pass uses a current file snapshot and rejects stale reads or edits.
+- Standard `grep`, `find`, and `ls` tools may be enabled temporarily; normal Pi turns keep their exact tool set.
 
 ## Rules
 
